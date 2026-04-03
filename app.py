@@ -1,15 +1,12 @@
 import streamlit as st
 import streamlit.components.v1 as components
-import requests
-import base64
+import google.generativeai as genai
 from PIL import Image
 import io
 
-# --- JAPAN AI 設定 ---
-API_KEY = "0a36d931-68fc-495d-a017-da4b8757d8f1"
-API_URL = "https://api.japan-ai.co.jp/chat/v2"
-API_MODEL_TITLE = "gpt-4o-mini"
-ARTIFACT_ID = "ba011f66-7e30-49ee-b7a0-2417a7ee26bf"
+# --- Gemini API 設定 ---
+API_KEY = "AIzaSyAC6W0cwPmw3VrpxqXoiKZEv4CpIYUHME0"
+genai.configure(api_key=API_KEY)
 
 st.set_page_config(page_title="写真解析", layout="centered")
 
@@ -23,50 +20,26 @@ if img_file:
     img = Image.open(img_file)
     st.image(img, caption="撮影した写真")
 
-    # --- JAPAN AI 解析セクション ---
-    with st.spinner("JAPAN AI が解析中..."):
+    # --- Gemini 解析セクション ---
+    with st.spinner("Geminiがタイトルを生成中..."):
         try:
-            # 画像をBase64に変換
-            buffered = io.BytesIO()
-            img.save(buffered, format="JPEG")
-            img_str = base64.b64encode(buffered.getvalue()).decode()
-
-            # APIリクエストの作成
-            # 画像を「images」配列としてトップレベルに配置する形式に修正
-            payload = {
-                "model": API_MODEL_TITLE,
-                "prompt": "この画像の内容を分析し、20文字以内の日本語で短いタイトルを付けてください。結果のみを出力してください。",
-                "stream": False,
-                "temperature": 0.0,
-                "artifactIds": [ARTIFACT_ID],
-                "images": [img_str] # 送信データを確実に配列で渡す
-            }
+            # Gemini 1.5 Flashモデルを使用（高速・高精度）
+            model = genai.GenerativeModel('gemini-1.5-flash')
             
-            headers = {
-                "Authorization": f"Bearer {API_KEY}",
-                "Content-Type": "application/json"
-            }
-
-            # タイムアウトを設定して確実にリクエストを送る
-            response = requests.post(API_URL, json=payload, headers=headers, timeout=30)
+            # 画像からタイトルを生成するプロンプト
+            prompt = "この写真の内容を分析し、20文字以内の日本語で短いタイトルを付けてください。挨拶や説明は一切不要です。タイトルのみを出力してください。"
             
-            if response.status_code in [200, 201]:
-                result_json = response.json()
-                # chatMessageから取得
-                title = result_json.get("chatMessage", "").strip()
-                
-                # 不要な接頭辞を除去
-                title = title.replace("出力タイトル：", "").replace("タイトル：", "").replace("タイトル:", "")
-                
-                if "添付されていません" in title or "見つかりません" in title:
-                    st.warning("AIが画像を認識できませんでした。再度撮影してください。")
-                else:
-                    st.success(f"🏷️ タイトル: {title}")
+            # 画像とプロンプトを送信
+            response = model.generate_content([prompt, img])
+            title = response.text.strip()
+            
+            if title:
+                st.success(f"🏷️ タイトル: {title}")
             else:
-                st.error(f"APIエラー: {response.status_code}")
+                st.warning("解析は完了しましたが、タイトルが生成されませんでした。")
                 
         except Exception as e:
-            st.error(f"解析エラー: {str(e)}")
+            st.error(f"Gemini解析エラー: {str(e)}")
 
     st.write("---")
     st.subheader("📍 撮影場所")
@@ -87,14 +60,23 @@ if img_file:
                 const data = await response.json();
                 const addr = data.address;
                 let formattedAddress = "";
+                
+                // 市区町村以降を結合（都道府県は含めない）
                 if (addr.city) formattedAddress += addr.city;
                 if (addr.suburb) formattedAddress += addr.suburb;
-                if (addr.city_district && !formattedAddress.includes(addr.city_district)) formattedAddress += addr.city_district;
+                if (addr.city_district && !formattedAddress.includes(addr.city_district)) {
+                    formattedAddress += addr.city_district;
+                }
                 if (addr.neighbourhood) formattedAddress += addr.neighbourhood;
+                
                 output.innerText = formattedAddress || "住所が見つかりませんでした";
-            } catch (err) { output.innerText = "住所の特定に失敗しました。"; }
+            } catch (err) {
+                output.innerText = "住所の特定に失敗しました。";
+            }
         },
-        (err) => { output.innerText = "エラー: 位置情報の許可が必要です。"; },
+        (err) => {
+            output.innerText = "エラー: 位置情報の許可が必要です。";
+        },
         { enableHighAccuracy: true }
     );
     </script>
