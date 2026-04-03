@@ -5,12 +5,11 @@ from PIL import Image
 import io
 import os
 
-# --- セキュリティ設定（環境変数から取得） ---
-# Streamlit CloudのSecrets、またはローカルの環境変数から取得します
+# --- セキュリティ設定（Secretsから取得） ---
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
 if not api_key:
-    st.error("APIキーが設定されていません。StreamlitのSecrets設定を確認してください。")
+    st.error("APIキーが設定されていません。Secretsを確認してください。")
     st.stop()
 
 genai.configure(api_key=api_key)
@@ -19,7 +18,10 @@ st.set_page_config(page_title="写真解析", layout="centered")
 
 st.title("写真解析・撮影")
 
-# カメラ入力（iPhone SE などのモバイル端末でも使いやすいUI）
+# 【パソコン対策】カメラが使えない場合のヘルプを表示
+st.caption("※カメラが起動しない場合は、ブラウザの「鍵マーク」からカメラ許可を確認してください。")
+
+# カメラ入力
 img_file = st.camera_input("写真を撮る")
 
 if img_file:
@@ -30,15 +32,14 @@ if img_file:
     # --- Gemini 解析セクション ---
     with st.spinner("AIが解析中..."):
         try:
-            # 利用可能な最新モデルを動的に取得（404エラー対策）
+            # 利用可能なモデルを動的に取得
             available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            
-            # gemini-1.5-flashを最優先、なければリストの先頭を使用
             target_model = next((m for m in available_models if 'gemini-1.5-flash' in m), 
                                 available_models[0] if available_models else None)
 
             if target_model:
                 model = genai.GenerativeModel(target_model)
+                # タイトル生成（20文字以内・日本語）
                 prompt = "この写真の内容を分析し、20文字以内の日本語で短いタイトルを付けてください。結果のみを出力してください。"
                 response = model.generate_content([prompt, img])
                 
@@ -77,16 +78,16 @@ if img_file:
                 if (addr.city_district && !formattedAddress.includes(addr.city_district)) formattedAddress += addr.city_district;
                 if (addr.neighbourhood) formattedAddress += addr.neighbourhood;
                 output.innerText = formattedAddress || "住所特定失敗";
-            } catch (err) { output.innerText = "通信エラー"; }
+            } catch (err) { output.innerText = "住所取得エラー"; }
         },
-        (err) => { output.innerText = "位置情報オフ"; },
+        (err) => { output.innerText = "位置情報を許可してください"; },
         { enableHighAccuracy: true }
     );
     </script>
     """
     components.html(address_script, height=80)
 
-    st.info("💡 保存するには、上の写真を長押ししてください。")
+    st.info("💡 保存するには、上の写真を長押しして保存してください。")
     
     if st.button("撮り直す"):
         st.rerun()
