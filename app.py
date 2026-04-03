@@ -9,7 +9,7 @@ import io
 API_KEY = "0a36d931-68fc-495d-a017-da4b8757d8f1"
 API_URL = "https://api.japan-ai.co.jp/chat/v2"
 API_MODEL_TITLE = "gpt-4o-mini"
-# 今回は「今撮った写真」を優先するため、artifactIdsはリクエスト時に制御します
+ARTIFACT_ID = "ba011f66-7e30-49ee-b7a0-2417a7ee26bf"
 
 st.set_page_config(page_title="写真解析", layout="centered")
 
@@ -32,14 +32,14 @@ if img_file:
             img_str = base64.b64encode(buffered.getvalue()).decode()
 
             # APIリクエストの作成
-            # artifactIdsを空にすることで、データセット検索ではなく「添付画像」の解析を強制します
+            # 画像を「images」配列としてトップレベルに配置する形式に修正
             payload = {
                 "model": API_MODEL_TITLE,
-                "prompt": "添付した画像の内容を分析し、20文字以内の日本語で短いタイトルを付けてください。結果のみを出力してください。",
+                "prompt": "この画像の内容を分析し、20文字以内の日本語で短いタイトルを付けてください。結果のみを出力してください。",
                 "stream": False,
                 "temperature": 0.0,
-                "artifactIds": [], # ここを空にするのがポイントです
-                "images": [img_str]
+                "artifactIds": [ARTIFACT_ID],
+                "images": [img_str] # 送信データを確実に配列で渡す
             }
             
             headers = {
@@ -47,17 +47,19 @@ if img_file:
                 "Content-Type": "application/json"
             }
 
-            response = requests.post(API_URL, json=payload, headers=headers)
+            # タイムアウトを設定して確実にリクエストを送る
+            response = requests.post(API_URL, json=payload, headers=headers, timeout=30)
             
             if response.status_code in [200, 201]:
                 result_json = response.json()
+                # chatMessageから取得
                 title = result_json.get("chatMessage", "").strip()
                 
                 # 不要な接頭辞を除去
                 title = title.replace("出力タイトル：", "").replace("タイトル：", "").replace("タイトル:", "")
                 
-                if "見つかりませんでした" in title or not title:
-                    st.warning("AIが画像を認識できませんでした。光量や角度を変えてみてください。")
+                if "添付されていません" in title or "見つかりません" in title:
+                    st.warning("AIが画像を認識できませんでした。再度撮影してください。")
                 else:
                     st.success(f"🏷️ タイトル: {title}")
             else:
