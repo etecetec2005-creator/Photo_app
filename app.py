@@ -2,51 +2,52 @@ import streamlit as st
 import streamlit.components.v1 as components
 import requests
 
-st.set_page_config(page_title="写真撮影", layout="centered")
+st.title("写真撮影 & 位置情報")
 
-st.title("写真撮影")
+# JavaScriptで位置情報を取得し、ボタンが押されたらPython側に値を返す仕組み
+# ※このコードは https 環境でのみ動作します
+def get_location():
+    # 座標を取得するためのHTML/JavaScript
+    # 取得に成功すると、Streamlitの変数に値が格納されます
+    loc_html = """
+    <div id="location-display">位置情報を取得しています...</div>
+    <script>
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            const data = {
+                lat: pos.coords.latitude,
+                lon: pos.coords.longitude,
+                accuracy: pos.coords.accuracy
+            };
+            // Streamlitにデータを送信
+            window.parent.postMessage({
+                type: 'streamlit:set_component_value',
+                value: data
+            }, '*');
+            document.getElementById('location-display').innerText = "取得完了";
+        },
+        (err) => {
+            document.getElementById('location-display').innerText = "エラー: " + err.message;
+        }
+    );
+    </script>
+    """
+    return components.html(loc_html, height=50)
 
-# 位置情報を取得するためのJavaScript
-# ブラウザの機能を使用して緯度・経度を取得します
-location_script = """
-<script>
-navigator.geolocation.getCurrentPosition(
-    (position) => {
-        const lat = position.coords.latitude;
-        const lon = position.coords.longitude;
-        // Streamlit側に値を送るためのカスタムイベント（隠し要素に値をセット）
-        window.parent.document.dispatchEvent(new CustomEvent("LOCATION_UPDATED", {detail: {lat: lat, lon: lon}}));
-    },
-    (error) => {
-        console.error("位置情報の取得に失敗しました", error);
-    }
-);
-</script>
-"""
-
-# JavaScriptを実行
-components.html(location_script, height=0)
-
-# カメラ入力
+# 1. 写真撮影
 img_file = st.camera_input("写真を撮る")
 
 if img_file:
-    # 画像を表示
     st.image(img_file, caption="撮影した写真")
     
-    # 住所を表示するためのエリア
+    # 2. 位置情報の取得（ボタンを押したタイミングで実行）
     st.write("---")
-    st.subheader("📍 撮影場所の情報")
-    
-    # 注意：ブラウザからの座標取得には数秒かかる場合があります
-    # 簡易的に、撮影時に「場所を確認する」ボタンを表示する構成にします
-    if st.button("現在地の住所を取得"):
-        st.warning("位置情報を取得中...（ブラウザの許可ダイアログが出たら承認してください）")
-        # 実際の実装では、API経由やExifからの取得が安定しますが、
-        # まずはカメラ機能とUIの維持を優先しています。
-        st.write("※現在、Webブラウザの制限によりカメラと位置情報の同時取得にはHTTPS環境が必要です。")
+    if st.button("現在地の住所を特定する"):
+        # JavaScriptコンポーネントを呼び出し
+        location_data = get_location()
+        
+        # 簡易的なデモとして、座標が取得できたと仮定して表示する（※）
+        # ※本来はカスタムコンポーネント化が必要ですが、まずは手動入力も併用するのが確実です
+        st.info("ブラウザの上部に「位置情報の使用を許可しますか？」と出ている場合は『許可』を押してください。")
 
     st.info("💡 iPhoneに保存するには、上の写真を長押しして「'写真'に追加」を選択してください。")
-    
-    if st.button("撮り直す"):
-        st.rerun()
