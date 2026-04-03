@@ -1,6 +1,6 @@
 import streamlit as st
 import google.generativeai as genai
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import io
 import os
 import base64
@@ -21,6 +21,7 @@ img_file = st.camera_input("写真を撮る")
 if img_file:
     # 1. 画像の読み込み
     img = Image.open(img_file)
+    width, height = img.size # 画像の元サイズを取得
     st.image(img, caption="解析・保存中...")
 
     # 2. AI解析（タイトル生成）
@@ -42,7 +43,7 @@ if img_file:
     img.save(buffered, format="JPEG", quality=85)
     img_str = base64.b64encode(buffered.getvalue()).decode()
 
-    # 4. 全自動JavaScript（住所取得完了後に即保存）
+    # 4. 全自動JavaScript（アスペクト比修正版）
     st.success(f"タイトル確定: {ai_title}")
     
     auto_save_script = f"""
@@ -53,6 +54,9 @@ if img_file:
         const status = document.getElementById('status');
         const aiTitle = "{ai_title}";
         const imgData = "data:image/jpeg;base64,{img_str}";
+        // 画像の元サイズをJS側に渡す
+        const originalWidth = {width};
+        const originalHeight = {height};
 
         navigator.geolocation.getCurrentPosition(
             async (pos) => {{
@@ -72,16 +76,27 @@ if img_file:
                     const {{ jsPDF }} = window.jspdf;
                     const doc = new jsPDF();
                     
-                    // 文字化け回避のため、PDF内への日本語テキスト印字を最小限（または無し）にし、
-                    // ファイル名に全力を注ぐ設定です。
-                    doc.addImage(imgData, 'JPEG', 10, 20, 180, 135);
+                    // --- アスペクト比を維持したサイズ計算 ---
+                    const maxWidth = 190;  // PDF上の最大幅(mm)
+                    const maxHeight = 250; // PDF上の最大高さ(mm)
+                    let width = maxWidth;
+                    let height = (originalHeight * maxWidth) / originalWidth;
+
+                    if (height > maxHeight) {{
+                        height = maxHeight;
+                        width = (originalWidth * maxHeight) / originalHeight;
+                    }}
+                    // ---------------------------------------
+
+                    // 画像を中央付近に配置
+                    doc.addImage(imgData, 'JPEG', 10, 20, width, height);
                     
                     // 自動保存実行
                     doc.save(fileName);
                     status.innerText = "✅ 保存完了しました";
 
                 }} catch (err) {{ 
-                    status.innerText = "住所取得エラーのため、名称未設定で保存します";
+                    status.innerText = "エラーのためデフォルトサイズで保存します";
                     const doc = new window.jspdf.jsPDF();
                     doc.addImage(imgData, 'JPEG', 10, 20, 180, 135);
                     doc.save("不明な場所_" + aiTitle + ".pdf");
