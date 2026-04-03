@@ -1,93 +1,80 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import google.generativeai as genai
 from PIL import Image
 import io
 import os
+from streamlit_js_eval import streamlit_js_eval
 
-# --- セキュリティ設定（Secretsから取得） ---
+# --- セキュリティ設定 ---
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
-
 if not api_key:
-    st.error("APIキーが設定されていません。Secretsを確認してください。")
+    st.error("APIキーが設定されていません。")
     st.stop()
 
 genai.configure(api_key=api_key)
 
-st.set_page_config(page_title="写真解析", layout="centered")
-
+st.set_page_config(page_title="写真解析・自動命名保存", layout="centered")
 st.title("写真解析・撮影")
 
-# 【パソコン対策】カメラが使えない場合のヘルプを表示
-st.caption("※カメラが起動しない場合は、ブラウザの「鍵マーク」からカメラ許可を確認してください。")
+# --- 1. 位置情報の取得 (JavaScriptからPythonへ値を渡す) ---
+# 住所を特定するための緯度経度を取得
+location = streamlit_js_eval(js_expressions="new Promise((res, rej) => { navigator.geolocation.getCurrentPosition(pos => res(pos.coords), err => res(null)) })", key="loc")
 
-# カメラ入力
+address_name = "位置情報不明"
+if location:
+    # 緯度経度から住所を逆ジオコーディング（Python側で実行）
+    import requests
+    try:
+        lat, lon = location['latitude'], location['longitude']
+        geo_res = requests.get(f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}", 
+                               headers={'Accept-Language': 'ja', 'User-Agent': 'StreamlitApp'}).json()
+        addr = geo_res.get('address', {})
+        # 市町村以下の住所を構築
+        address_name = (addr.get('city') or addr.get('town') or "") + (addr.get('suburb') or addr.get('neighbourhood') or "")
+        if not address_name: address_name = "不明な場所"
+    except:
+        address_name = "住所取得エラー"
+
+# --- 2. カメラ入力 ---
 img_file = st.camera_input("写真を撮る")
 
 if img_file:
-    # 画像を表示
     img = Image.open(img_file)
-    st.image(img, caption="撮影した写真")
+    st.image(img, caption=f"📍 現在地付近: {address_name}")
 
-    # --- Gemini 解析セクション ---
-    with st.spinner("AIが解析中..."):
+    # --- Gemini 解析 ---
+    ai_title = "タイトル未生成"
+    with st.spinner("AIがタイトルを生成中..."):
         try:
-            # 利用可能なモデルを動的に取得
-            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            target_model = next((m for m in available_models if 'gemini-1.5-flash' in m), 
-                                available_models[0] if available_models else None)
-
-            if target_model:
-                model = genai.GenerativeModel(target_model)
-                # タイトル生成（20文字以内・日本語）
-                prompt = "この写真の内容を分析し、20文字以内の日本語で短いタイトルを付けてください。結果のみを出力してください。"
-                response = model.generate_content([prompt, img])
-                
-                if response.text:
-                    st.success(f"🏷️ タイトル: {response.text.strip()}")
-                else:
-                    st.warning("タイトルを生成できませんでした。")
-            else:
-                st.error("利用可能なAIモデルが見つかりませんでした。")
-                
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            prompt = "この写真の内容を分析し、ファイル名に使える20文字以内の日本語で短いタイトルを付けてください。記号やスペースは含めないでください。結果のみを出力してください。"
+            response = model.generate_content([prompt, img])
+            if response.text:
+                ai_title = response.text.strip().replace(" ", "").replace("　", "")
+                st.success(f"🏷️ AIタイトル: {ai_title}")
         except Exception as e:
-            st.error("解析エラーが発生しました。")
-            st.code(f"Detail: {str(e)}")
+            st.error("AI解析失敗")
 
-    st.write("---")
-    st.subheader("📍 撮影場所")
+    # --- 3. ファイル名の作成と保存設定 ---
+    # 禁止文字を置換
+    safe_address = address_name.replace("/", "_")
+    final_filename = f"{safe_address}_{ai_title}.jpg"
 
-    # 住所取得ロジック（都道府県抜き）
-    address_script = """
-    <div id="address-out" style="font-weight:bold; color:#1f77b4; padding:10px; background-color:#f0f2f6; border-radius:5px; font-size:14px;">
-        位置情報を取得中...
-    </div>
-    <script>
-    const output = document.getElementById('address-out');
-    navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-            try {
-                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`, {
-                    headers: { 'Accept-Language': 'ja' }
-                });
-                const data = await response.json();
-                const addr = data.address;
-                let formattedAddress = "";
-                if (addr.city) formattedAddress += addr.city;
-                if (addr.suburb) formattedAddress += addr.suburb;
-                if (addr.city_district && !formattedAddress.includes(addr.city_district)) formattedAddress += addr.city_district;
-                if (addr.neighbourhood) formattedAddress += addr.neighbourhood;
-                output.innerText = formattedAddress || "住所特定失敗";
-            } catch (err) { output.innerText = "住所取得エラー"; }
-        },
-        (err) => { output.innerText = "位置情報を許可してください"; },
-        { enableHighAccuracy: true }
-    );
-    </script>
-    """
-    components.html(address_script, height=80)
+    # ダウンロード用バッファの作成
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    byte_im = buf.getvalue()
 
-    st.info("💡 保存するには、上の写真を長押しして保存してください。")
+    st.write(f"📁 保存名: `{final_filename}`")
     
+    # ダウンロードボタン
+    st.download_button(
+        label="この名前で写真を保存",
+        data=byte_im,
+        file_name=final_filename,
+        mime="image/jpeg",
+        use_container_width=True
+    )
+
     if st.button("撮り直す"):
         st.rerun()
