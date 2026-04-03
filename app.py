@@ -46,33 +46,23 @@ if img_file:
         
         # 画像をBase64変換
         buffered = io.BytesIO()
-        img.save(buffered, format="JPEG", quality=85)
+        img.save(buffered, format="JPEG", quality=90)
         img_str = base64.b64encode(buffered.getvalue()).decode()
 
-        # 住所取得 + 強力なダウンロード処理
+        # 住所取得 + 別タブ表示処理
         address_script = f"""
         <div id="address-out" style="font-weight:bold; color:#1f77b4; padding:10px; background-color:#f0f2f6; border-radius:5px; font-size:14px; margin-bottom:10px;">
             位置情報を取得中...
         </div>
-        <button id="dl-btn" style="width:100%; padding:15px; background-color:#ff4b4b; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:bold; font-size:16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-            📥 準備中...
+        <button id="view-btn" style="width:100%; padding:15px; background-color:#2e7d32; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:bold; font-size:16px;">
+            ⌛ 準備中...
         </button>
 
         <script>
         const output = document.getElementById('address-out');
-        const dlBtn = document.getElementById('dl-btn');
+        const viewBtn = document.getElementById('view-btn');
         const finalAiTitle = "{ai_title_value}";
-        const base64Data = "{img_str}";
-
-        // Base64をBlob(ファイルオブジェクト)に変換する関数
-        function base64ToBlob(base64, type) {{
-            const bin = atob(base64);
-            const buffer = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) {{
-                buffer[i] = bin.charCodeAt(i);
-            }}
-            return new Blob([buffer.buffer], {{type: type}});
-        }}
+        const imgData = "data:image/jpeg;base64,{img_str}";
 
         navigator.geolocation.getCurrentPosition(
             async (pos) => {{
@@ -92,29 +82,20 @@ if img_file:
                     output.innerText = finalAddr;
 
                     const fileName = finalAddr + "_" + finalAiTitle + ".jpg";
-                    dlBtn.innerText = "📥 「" + fileName + "」を保存";
+                    viewBtn.innerText = "📂 名前付きで保存用の画面を開く";
                     
-                    dlBtn.onclick = () => {{
-                        const blob = base64ToBlob(base64Data, 'image/jpeg');
-                        const url = window.URL.createObjectURL(blob);
-                        const link = document.createElement('a');
-                        link.href = url;
-                        link.download = fileName;
-                        
-                        // iPhone/Safari対策: ボディに追加してクリック
-                        document.body.appendChild(link);
-                        link.click();
-                        
-                        // クリーンアップ
-                        setTimeout(() => {{
-                            document.body.removeChild(link);
-                            window.URL.revokeObjectURL(url);
-                        }}, 100);
+                    viewBtn.onclick = () => {{
+                        // 新しいタブで画像を表示
+                        const newTab = window.open();
+                        newTab.document.write('<html><head><title>' + fileName + '</title></head><body style="margin:0; display:flex; flex-direction:column; align-items:center; background:#000; color:#fff; font-family:sans-serif;">');
+                        newTab.document.write('<p style="padding:20px; text-align:center;">画像を長押しして<b>「"ファイル"に保存」</b>を選択してください<br><small>保存名: ' + fileName + '</small></p>');
+                        newTab.document.write('<img src="' + imgData + '" style="max-width:100%; height:auto;">');
+                        newTab.document.write('</body></html>');
+                        newTab.document.close();
                     }};
 
                 }} catch (err) {{ 
                     output.innerText = "住所取得エラー";
-                    dlBtn.innerText = "📥 住所なしで保存";
                 }}
             }},
             (err) => {{ output.innerText = "位置情報を許可してください"; }},
@@ -122,7 +103,7 @@ if img_file:
         );
         </script>
         """
-        components.html(address_script, height=200)
+        components.html(address_script, height=220)
 
     if st.button("撮り直す"):
         st.rerun()
