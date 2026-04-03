@@ -9,9 +9,8 @@ import io
 API_KEY = "0a36d931-68fc-495d-a017-da4b8757d8f1"
 API_URL = "https://api.japan-ai.co.jp/chat/v2"
 API_MODEL_TITLE = "gpt-4o-mini"
-ARTIFACT_ID = "ba011f66-7e30-49ee-b7a0-2417a7ee26bf"
+# 今回は「今撮った写真」を優先するため、artifactIdsはリクエスト時に制御します
 
-# ページ設定（構文エラーを修正）
 st.set_page_config(page_title="写真解析", layout="centered")
 
 st.title("写真解析・撮影")
@@ -25,21 +24,21 @@ if img_file:
     st.image(img, caption="撮影した写真")
 
     # --- JAPAN AI 解析セクション ---
-    with st.spinner("JAPAN AI が画像からタイトルを生成中..."):
+    with st.spinner("JAPAN AI が解析中..."):
         try:
-            # 画像をBase64に変換（JPEG形式）
+            # 画像をBase64に変換
             buffered = io.BytesIO()
             img.save(buffered, format="JPEG")
             img_str = base64.b64encode(buffered.getvalue()).decode()
 
             # APIリクエストの作成
-            # ※「送付した画像」を優先して見るようにプロンプトを厳密化
+            # artifactIdsを空にすることで、データセット検索ではなく「添付画像」の解析を強制します
             payload = {
                 "model": API_MODEL_TITLE,
-                "prompt": "今送信したこの画像を直接分析してください。画像の内容を短く、一言で表すタイトル（20文字以内）を【日本語】で回答してください。挨拶や説明は一切不要です。",
+                "prompt": "添付した画像の内容を分析し、20文字以内の日本語で短いタイトルを付けてください。結果のみを出力してください。",
                 "stream": False,
                 "temperature": 0.0,
-                "artifactIds": [ARTIFACT_ID], 
+                "artifactIds": [], # ここを空にするのがポイントです
                 "images": [img_str]
             }
             
@@ -57,12 +56,12 @@ if img_file:
                 # 不要な接頭辞を除去
                 title = title.replace("出力タイトル：", "").replace("タイトル：", "").replace("タイトル:", "")
                 
-                if title:
-                    st.success(f"🏷️ タイトル: {title}")
+                if "見つかりませんでした" in title or not title:
+                    st.warning("AIが画像を認識できませんでした。光量や角度を変えてみてください。")
                 else:
-                    st.warning("解析は成功しましたが、タイトルが取得できませんでした。")
+                    st.success(f"🏷️ タイトル: {title}")
             else:
-                st.error(f"APIエラー: {response.status_code}\n{response.text}")
+                st.error(f"APIエラー: {response.status_code}")
                 
         except Exception as e:
             st.error(f"解析エラー: {str(e)}")
