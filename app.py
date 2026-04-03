@@ -1,24 +1,16 @@
-from PIL import Image
 import streamlit as st
-import io
+
+st.title("写真撮影")
 
 img_file = st.camera_input("写真を撮る")
 
 if img_file:
-    # 1. 画像データとして読み込む
-    image = Image.open(img_file)
+    # 画像を表示する
+    st.image(img_file, caption="撮影した写真")
     
-    # 2. 最高画質でバイトデータに変換し直す (PNGなら無劣化、JPEGならquality=100)
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")  # 無劣化保存ならPNGを推奨
-    byte_im = buf.getvalue()
-
-    st.image(image, caption="プレビュー")
-
-    # ダウンロードボタンに最高画質のデータを渡す
-    st.download_button(
-        label="最高画質で保存",
-        data=byte_im,
-        file_name="high_quality_photo.png",
-        mime="image/png"
-    )
+    # メッセージで保存方法を案内する
+    st.info("💡 iPhoneに保存するには、上の写真を長押しして「'写真'に追加」を選択してください。")
+    
+    # 撮り直したい場合のために再実行ボタンを配置（任意）
+    if st.button("撮り直す"):
+        st.rerun()
