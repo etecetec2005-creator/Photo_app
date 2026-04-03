@@ -14,7 +14,7 @@ if not api_key:
 genai.configure(api_key=api_key)
 
 st.set_page_config(page_title="自動写真保存", layout="centered")
-st.title("📸 全自動・写真解析保存")
+st.title("📸 全自動・高画質写真解析保存")
 
 img_file = st.camera_input("写真を撮る")
 
@@ -22,7 +22,7 @@ if img_file:
     # 1. 画像の読み込み
     img = Image.open(img_file)
     width, height = img.size # 画像の元サイズを取得
-    st.image(img, caption="解析・保存中...")
+    st.image(img, caption="解析・高画質保存中...")
 
     # 2. AI解析（タイトル生成）
     ai_title = "名称未設定"
@@ -38,12 +38,13 @@ if img_file:
         except:
             pass
 
-    # 3. PDF生成用のBase64変換
+    # 3. PDF生成用のBase64変換（最高画質設定）
     buffered = io.BytesIO()
-    img.save(buffered, format="JPEG", quality=85)
+    # 改善ポイントA: クオリティを100(最高)にし、サブサンプリングを無効化して劣化を最小限に
+    img.save(buffered, format="JPEG", quality=100, subsampling=0)
     img_str = base64.b64encode(buffered.getvalue()).decode()
 
-    # 4. 全自動JavaScript（アスペクト比修正版）
+    # 4. 全自動JavaScript（アスペクト比修正 + 高画質埋め込み）
     st.success(f"タイトル確定: {ai_title}")
     
     auto_save_script = f"""
@@ -54,7 +55,6 @@ if img_file:
         const status = document.getElementById('status');
         const aiTitle = "{ai_title}";
         const imgData = "data:image/jpeg;base64,{img_str}";
-        // 画像の元サイズをJS側に渡す
         const originalWidth = {width};
         const originalHeight = {height};
 
@@ -78,28 +78,28 @@ if img_file:
                     
                     // --- アスペクト比を維持したサイズ計算 ---
                     const maxWidth = 190;  // PDF上の最大幅(mm)
-                    const maxHeight = 250; // PDF上の最大高さ(mm)
-                    let width = maxWidth;
-                    let height = (originalHeight * maxWidth) / originalWidth;
+                    const maxHeight = 260; // PDF上の最大高さ(mm)
+                    let printWidth = maxWidth;
+                    let printHeight = (originalHeight * maxWidth) / originalWidth;
 
-                    if (height > maxHeight) {{
-                        height = maxHeight;
-                        width = (originalWidth * maxHeight) / originalHeight;
+                    if (printHeight > maxHeight) {{
+                        printHeight = maxHeight;
+                        printWidth = (originalWidth * maxHeight) / originalHeight;
                     }}
                     // ---------------------------------------
 
-                    // 画像を中央付近に配置
-                    doc.addImage(imgData, 'JPEG', 10, 20, width, height);
+                    // 画像をPDFに配置（圧縮なしで埋め込み）
+                    doc.addImage(imgData, 'JPEG', 10, 20, printWidth, printHeight, undefined, 'NONE');
                     
                     // 自動保存実行
                     doc.save(fileName);
                     status.innerText = "✅ 保存完了しました";
 
                 }} catch (err) {{ 
-                    status.innerText = "エラーのためデフォルトサイズで保存します";
+                    status.innerText = "エラーのため標準サイズで保存を試みます";
                     const doc = new window.jspdf.jsPDF();
                     doc.addImage(imgData, 'JPEG', 10, 20, 180, 135);
-                    doc.save("不明な場所_" + aiTitle + ".pdf");
+                    doc.save("エラー_" + aiTitle + ".pdf");
                 }}
             }},
             (err) => {{ status.innerText = "位置情報を許可してください"; }},
