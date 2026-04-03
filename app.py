@@ -38,7 +38,7 @@ if img_file:
                 "stream": False,
                 "temperature": 0.0,
                 "artifactIds": [ARTIFACT_ID],
-                "images": [img_str] # 画像データを送信
+                "images": [img_str]
             }
             
             headers = {
@@ -46,18 +46,24 @@ if img_file:
                 "Content-Type": "application/json"
             }
 
+            # 実行
             response = requests.post(API_URL, json=payload, headers=headers)
             
-            if response.status_code == 200:
+            # 【修正点】200(OK) または 201(Created) の場合に処理を続行
+            if response.status_code in [200, 201]:
                 result_json = response.json()
-                # GASの仕様に合わせ chatMessage フィールドから取得
-                title = result_json.get("chatMessage", "タイトル生成失敗").strip()
-                # 「出力タイトル：」などの接頭辞が含まれる場合を除去
+                # chatMessage フィールドから取得
+                title = result_json.get("chatMessage", "").strip()
+                
+                # 接頭辞の除去
                 title = title.replace("出力タイトル：", "").replace("タイトル：", "").replace("タイトル:", "")
                 
-                st.success(f"🏷️ タイトル: {title}")
+                if title:
+                    st.success(f"🏷️ タイトル: {title}")
+                else:
+                    st.warning("タイトルを取得できましたが、内容が空でした。")
             else:
-                st.error(f"APIエラー: {response.status_code}")
+                st.error(f"APIエラー: {response.status_code}\n{response.text}")
                 
         except Exception as e:
             st.error(f"解析中にエラーが発生しました: {str(e)}")
@@ -65,7 +71,7 @@ if img_file:
     st.write("---")
     st.subheader("📍 撮影場所")
 
-    # 住所取得ロジック（都道府県抜き・以前の完成版を維持）
+    # 住所取得ロジック（都道府県抜き）
     address_script = """
     <div id="address-out" style="font-weight:bold; color:#1f77b4; padding:10px; background-color:#f0f2f6; border-radius:5px; font-size:14px;">
         位置情報を取得中...
@@ -85,7 +91,7 @@ if img_file:
                 if (addr.suburb) formattedAddress += addr.suburb;
                 if (addr.city_district && !formattedAddress.includes(addr.city_district)) formattedAddress += addr.city_district;
                 if (addr.neighbourhood) formattedAddress += addr.neighbourhood;
-                output.innerText = formattedAddress || data.display_name.split(',')[0];
+                output.innerText = formattedAddress || "住所が見つかりませんでした";
             } catch (err) { output.innerText = "住所の特定に失敗しました。"; }
         },
         (err) => { output.innerText = "エラー: 位置情報の取得を許可してください。"; },
