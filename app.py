@@ -34,17 +34,17 @@ if img_file:
             prompt = "この写真の内容を分析し、短い日本語タイトル（15文字以内）を1つ。結果のみ。"
             response = model.generate_content([prompt, img])
             if response.text:
-                ai_title = response.text.strip().replace("\n", "").replace("/", "-")
+                # ファイル名に使えない文字を置換
+                ai_title = response.text.strip().replace("\n", "").replace("\r", "").replace('"', '').replace("'", "").replace("/", "-")
         except:
             pass
 
     # 3. PDF生成用のBase64変換（最高画質設定）
     buffered = io.BytesIO()
-    # 改善ポイントA: クオリティを100(最高)にし、サブサンプリングを無効化して劣化を最小限に
     img.save(buffered, format="JPEG", quality=100, subsampling=0)
     img_str = base64.b64encode(buffered.getvalue()).decode()
 
-    # 4. 全自動JavaScript（アスペクト比修正 + 高画質埋め込み）
+    # 4. 全自動JavaScript（ファイル名順序変更：タイトル_住所）
     st.success(f"タイトル確定: {ai_title}")
     
     auto_save_script = f"""
@@ -69,16 +69,17 @@ if img_file:
                     let finalAddr = (addr.city || "") + (addr.suburb || "") + (addr.city_district || "") + (addr.neighbourhood || "");
                     if(!finalAddr) finalAddr = "住所不明";
                     
-                    const fileName = finalAddr + "_" + aiTitle + ".pdf";
+                    // ファイル名の順番を「タイトル_住所」に変更
+                    const fileName = aiTitle + "_" + finalAddr + ".pdf";
                     status.innerText = "保存実行中: " + fileName;
 
                     // PDF生成
                     const {{ jsPDF }} = window.jspdf;
                     const doc = new jsPDF();
                     
-                    // --- アスペクト比を維持したサイズ計算 ---
-                    const maxWidth = 190;  // PDF上の最大幅(mm)
-                    const maxHeight = 260; // PDF上の最大高さ(mm)
+                    // アスペクト比を維持したサイズ計算
+                    const maxWidth = 190;
+                    const maxHeight = 260;
                     let printWidth = maxWidth;
                     let printHeight = (originalHeight * maxWidth) / originalWidth;
 
@@ -86,20 +87,19 @@ if img_file:
                         printHeight = maxHeight;
                         printWidth = (originalWidth * maxHeight) / originalHeight;
                     }}
-                    // ---------------------------------------
 
-                    // 画像をPDFに配置（圧縮なしで埋め込み）
+                    // 画像をPDFに配置（圧縮なし）
                     doc.addImage(imgData, 'JPEG', 10, 20, printWidth, printHeight, undefined, 'NONE');
                     
                     // 自動保存実行
                     doc.save(fileName);
-                    status.innerText = "✅ 保存完了しました";
+                    status.innerText = "✅ 保存完了しました: " + fileName;
 
                 }} catch (err) {{ 
-                    status.innerText = "エラーのため標準サイズで保存を試みます";
+                    status.innerText = "エラーのためタイトルのみで保存を試みます";
                     const doc = new window.jspdf.jsPDF();
                     doc.addImage(imgData, 'JPEG', 10, 20, 180, 135);
-                    doc.save("エラー_" + aiTitle + ".pdf");
+                    doc.save(aiTitle + ".pdf");
                 }}
             }},
             (err) => {{ status.innerText = "位置情報を許可してください"; }},
