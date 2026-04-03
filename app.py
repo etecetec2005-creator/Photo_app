@@ -1,84 +1,101 @@
 import streamlit as st
 import streamlit.components.v1 as components
+import requests
+import base64
+from PIL import Image
+import io
 
-st.set_page_config(page_title="写真撮影", layout="centered")
+# --- JAPAN AI 設定 ---
+API_KEY = "0a36d931-68fc-495d-a017-da4b8757d8f1"
+API_URL = "https://api.japan-ai.co.jp/chat/v2"
+API_MODEL_TITLE = "gpt-4o-mini"
+ARTIFACT_ID = "ba011f66-7e30-49ee-b7a0-2417a7ee26bf"
 
-st.title("写真撮影")
+st.set_page_config(page_title="写真解析", layout="centered")
+
+st.title("写真解析・撮影")
 
 # カメラ入力
 img_file = st.camera_input("写真を撮る")
 
 if img_file:
     # 画像を表示
-    st.image(img_file, caption="撮影した写真")
-    
+    img = Image.open(img_file)
+    st.image(img, caption="撮影した写真")
+
+    # --- JAPAN AI 解析セクション ---
+    with st.spinner("JAPAN AI がタイトルを生成中..."):
+        try:
+            # 画像をBase64に変換
+            buffered = io.BytesIO()
+            img.save(buffered, format="JPEG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+
+            # APIリクエストの作成
+            payload = {
+                "model": API_MODEL_TITLE,
+                "prompt": "この写真の内容を一言で表す短いタイトル（20文字以内）を付けてください。結果のみを出力し、説明は不要です。",
+                "stream": False,
+                "temperature": 0.0,
+                "artifactIds": [ARTIFACT_ID],
+                "images": [img_str] # 画像データを送信
+            }
+            
+            headers = {
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json"
+            }
+
+            response = requests.post(API_URL, json=payload, headers=headers)
+            
+            if response.status_code == 200:
+                result_json = response.json()
+                # GASの仕様に合わせ chatMessage フィールドから取得
+                title = result_json.get("chatMessage", "タイトル生成失敗").strip()
+                # 「出力タイトル：」などの接頭辞が含まれる場合を除去
+                title = title.replace("出力タイトル：", "").replace("タイトル：", "").replace("タイトル:", "")
+                
+                st.success(f"🏷️ タイトル: {title}")
+            else:
+                st.error(f"APIエラー: {response.status_code}")
+                
+        except Exception as e:
+            st.error(f"解析中にエラーが発生しました: {str(e)}")
+
     st.write("---")
     st.subheader("📍 撮影場所")
 
-    # 都道府県名を除外した住所取得ロジック
+    # 住所取得ロジック（都道府県抜き・以前の完成版を維持）
     address_script = """
     <div id="address-out" style="font-weight:bold; color:#1f77b4; padding:10px; background-color:#f0f2f6; border-radius:5px; font-size:14px;">
         位置情報を取得中...
     </div>
-
     <script>
     const output = document.getElementById('address-out');
-
     navigator.geolocation.getCurrentPosition(
         async (pos) => {
-            const lat = pos.coords.latitude;
-            const lon = pos.coords.longitude;
-            
             try {
-                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`, {
+                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`, {
                     headers: { 'Accept-Language': 'ja' }
                 });
                 const data = await response.json();
                 const addr = data.address;
-                
                 let formattedAddress = "";
-                
-                // 都道府県(province)はスキップし、市区町村以降を結合
-                if (addr.city) formattedAddress += addr.city;         // 大阪市
-                if (addr.suburb) formattedAddress += addr.suburb;     // 淀川区
-                
-                if (addr.city_district) {
-                    if (!formattedAddress.includes(addr.city_district)) {
-                        formattedAddress += addr.city_district;
-                    }
-                }
-                
-                if (addr.neighbourhood) {
-                    formattedAddress += addr.neighbourhood;           // 宮原一丁目
-                } else if (addr.suburb && !formattedAddress.includes(addr.suburb)) {
-                    // neighbourhoodがない場合の補完
-                    formattedAddress += addr.suburb;
-                }
-
-                // 結合結果が空の場合のフォールバック
-                if (!formattedAddress) {
-                    // 全体文字列から都道府県部分をカットする簡易処理
-                    formattedAddress = data.display_name.split(',')[0];
-                }
-
-                output.innerText = formattedAddress;
-                
-            } catch (err) {
-                output.innerText = "住所の特定に失敗しました。";
-            }
+                if (addr.city) formattedAddress += addr.city;
+                if (addr.suburb) formattedAddress += addr.suburb;
+                if (addr.city_district && !formattedAddress.includes(addr.city_district)) formattedAddress += addr.city_district;
+                if (addr.neighbourhood) formattedAddress += addr.neighbourhood;
+                output.innerText = formattedAddress || data.display_name.split(',')[0];
+            } catch (err) { output.innerText = "住所の特定に失敗しました。"; }
         },
-        (err) => {
-            output.innerText = "エラー: 位置情報の取得を許可してください。";
-        },
-        { enableHighAccuracy: true, timeout: 10000 }
+        (err) => { output.innerText = "エラー: 位置情報の取得を許可してください。"; },
+        { enableHighAccuracy: true }
     );
     </script>
     """
-    
-    # 表示エリアの実行
     components.html(address_script, height=80)
 
-    st.info("💡 iPhoneに保存するには、上の写真を長押しして「'写真'に追加」を選択してください。")
+    st.info("💡 保存するには、上の写真を長押しして「'写真'に追加」を選択してください。")
     
     if st.button("撮り直す"):
         st.rerun()
