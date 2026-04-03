@@ -23,23 +23,28 @@ if img_file:
     # --- Gemini 解析セクション ---
     with st.spinner("Geminiがタイトルを生成中..."):
         try:
-            # Gemini 1.5 Flashモデルを使用（高速・高精度）
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # モデル名の指定を最新版(-latest)に変更して試行
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
             
             # 画像からタイトルを生成するプロンプト
-            prompt = "この写真の内容を分析し、20文字以内の日本語で短いタイトルを付けてください。挨拶や説明は一切不要です。タイトルのみを出力してください。"
+            prompt = "この写真の内容を分析し、20文字以内の日本語で短いタイトルを付けてください。結果のみを出力し、説明は不要です。"
             
-            # 画像とプロンプトを送信
-            response = model.generate_content([prompt, img])
-            title = response.text.strip()
+            # 安全にコンテンツを生成
+            response = model.generate_content(
+                contents=[prompt, img]
+            )
             
-            if title:
+            # レスポンスからテキストを抽出
+            if response.text:
+                title = response.text.strip()
                 st.success(f"🏷️ タイトル: {title}")
             else:
-                st.warning("解析は完了しましたが、タイトルが生成されませんでした。")
+                st.warning("タイトルを生成できませんでした。")
                 
         except Exception as e:
+            # エラーの詳細を表示
             st.error(f"Gemini解析エラー: {str(e)}")
+            st.info("💡 404エラーが出る場合は、ライブラリのバージョンが古い可能性があります。 requirements.txt に google-generativeai>=0.5.0 を指定してください。")
 
     st.write("---")
     st.subheader("📍 撮影場所")
@@ -61,7 +66,6 @@ if img_file:
                 const addr = data.address;
                 let formattedAddress = "";
                 
-                // 市区町村以降を結合（都道府県は含めない）
                 if (addr.city) formattedAddress += addr.city;
                 if (addr.suburb) formattedAddress += addr.suburb;
                 if (addr.city_district && !formattedAddress.includes(addr.city_district)) {
