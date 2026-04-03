@@ -15,7 +15,7 @@ if not api_key:
 genai.configure(api_key=api_key)
 
 st.set_page_config(page_title="写真解析", layout="centered")
-st.title("写真解析・撮影")
+st.title("📸 写真解析・確定保存")
 
 img_file = st.camera_input("写真を撮る")
 
@@ -32,36 +32,34 @@ if img_file:
 
             if target_model:
                 model = genai.GenerativeModel(target_model)
-                prompt = "この写真の内容を分析し、20文字以内の日本語で短いタイトルを1つだけ付けてください。結果のみを出力。"
+                prompt = "この写真の内容を分析し、短いタイトルを1つ。結果のみ。"
                 response = model.generate_content([prompt, img])
-                
                 if response.text:
-                    ai_title_value = response.text.strip().replace("\n", "").replace("\r", "").replace('"', '').replace("'", "").replace("/", "-")
+                    ai_title_value = response.text.strip().replace("\n", "").replace("/", "-")
                     st.success(f"🏷️ AIタイトル: {ai_title_value}")
-        except Exception as e:
-            st.error(f"解析エラー: {e}")
+        except:
+            ai_title_value = "名称未設定"
 
     if ai_title_value:
-        st.write("---")
-        
-        # 画像をBase64変換
+        # 画像をBase64変換（PDFに埋め込む用）
         buffered = io.BytesIO()
-        img.save(buffered, format="JPEG", quality=90)
+        img.save(buffered, format="JPEG", quality=85)
         img_str = base64.b64encode(buffered.getvalue()).decode()
 
-        # 住所取得 + 別タブ表示処理
         address_script = f"""
         <div id="address-out" style="font-weight:bold; color:#1f77b4; padding:10px; background-color:#f0f2f6; border-radius:5px; font-size:14px; margin-bottom:10px;">
-            位置情報を取得中...
+            住所取得中...
         </div>
-        <button id="view-btn" style="width:100%; padding:15px; background-color:#2e7d32; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:bold; font-size:16px;">
-            ⌛ 準備中...
+        <button id="pdf-btn" style="width:100%; padding:15px; background-color:#1a73e8; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:bold; font-size:16px;">
+            📄 名前を維持してPDF保存
         </button>
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
         <script>
         const output = document.getElementById('address-out');
-        const viewBtn = document.getElementById('view-btn');
-        const finalAiTitle = "{ai_title_value}";
+        const pdfBtn = document.getElementById('pdf-btn');
+        const aiTitle = "{ai_title_value}";
         const imgData = "data:image/jpeg;base64,{img_str}";
 
         navigator.geolocation.getCurrentPosition(
@@ -72,38 +70,33 @@ if img_file:
                     }});
                     const data = await response.json();
                     const addr = data.address;
-                    let formattedAddress = "";
-                    if (addr.city) formattedAddress += addr.city;
-                    if (addr.suburb) formattedAddress += addr.suburb;
-                    if (addr.city_district && !formattedAddress.includes(addr.city_district)) formattedAddress += addr.city_district;
-                    if (addr.neighbourhood) formattedAddress += addr.neighbourhood;
+                    let finalAddr = (addr.city || "") + (addr.suburb || "") + (addr.city_district || "");
+                    if(!finalAddr) finalAddr = "住所不明";
                     
-                    const finalAddr = (formattedAddress || "住所特定失敗").replace(/[/\\?%*:|"<>]/g, '-');
                     output.innerText = finalAddr;
+                    const fileName = finalAddr + "_" + aiTitle + ".pdf";
+                    pdfBtn.innerText = "📄 「" + fileName + "」を保存";
 
-                    const fileName = finalAddr + "_" + finalAiTitle + ".jpg";
-                    viewBtn.innerText = "📂 名前付きで保存用の画面を開く";
-                    
-                    viewBtn.onclick = () => {{
-                        // 新しいタブで画像を表示
-                        const newTab = window.open();
-                        newTab.document.write('<html><head><title>' + fileName + '</title></head><body style="margin:0; display:flex; flex-direction:column; align-items:center; background:#000; color:#fff; font-family:sans-serif;">');
-                        newTab.document.write('<p style="padding:20px; text-align:center;">画像を長押しして<b>「"ファイル"に保存」</b>を選択してください<br><small>保存名: ' + fileName + '</small></p>');
-                        newTab.document.write('<img src="' + imgData + '" style="max-width:100%; height:auto;">');
-                        newTab.document.write('</body></html>');
-                        newTab.document.close();
+                    pdfBtn.onclick = async () => {{
+                        const {{ jsPDF }} = window.jspdf;
+                        const doc = new jsPDF();
+                        
+                        // 画像をPDFのサイズに合わせて配置
+                        doc.text(finalAddr + " / " + aiTitle, 10, 10);
+                        doc.addImage(imgData, 'JPEG', 10, 20, 180, 135);
+                        
+                        // PDFとして保存（これならiOSでも名前が維持されます）
+                        doc.save(fileName);
                     }};
 
-                }} catch (err) {{ 
-                    output.innerText = "住所取得エラー";
-                }}
+                }} catch (err) {{ output.innerText = "エラー"; }}
             }},
-            (err) => {{ output.innerText = "位置情報を許可してください"; }},
+            (err) => {{ output.innerText = "位置情報オフ"; }},
             {{ enableHighAccuracy: true }}
         );
         </script>
         """
-        components.html(address_script, height=220)
+        components.html(address_script, height=200)
 
     if st.button("撮り直す"):
         st.rerun()
