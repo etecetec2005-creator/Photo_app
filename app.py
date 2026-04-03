@@ -23,28 +23,25 @@ if img_file:
     # --- Gemini 解析セクション ---
     with st.spinner("Geminiがタイトルを生成中..."):
         try:
-            # モデル名の指定を最新版(-latest)に変更して試行
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            # 1. まず最新の Flash モデルを試行
+            try:
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content(["この写真に20文字以内の日本語タイトルを付けてください。結果のみ出力してください。", img])
+            except Exception:
+                # 2. 失敗した場合、旧来の Vision モデルを試行（互換性のため）
+                model = genai.GenerativeModel('gemini-pro-vision')
+                response = model.generate_content(["この写真に20文字以内の日本語タイトルを付けてください。結果のみ出力してください。", img])
             
-            # 画像からタイトルを生成するプロンプト
-            prompt = "この写真の内容を分析し、20文字以内の日本語で短いタイトルを付けてください。結果のみを出力し、説明は不要です。"
-            
-            # 安全にコンテンツを生成
-            response = model.generate_content(
-                contents=[prompt, img]
-            )
-            
-            # レスポンスからテキストを抽出
-            if response.text:
+            # テキストの抽出
+            if response and response.text:
                 title = response.text.strip()
                 st.success(f"🏷️ タイトル: {title}")
             else:
-                st.warning("タイトルを生成できませんでした。")
+                st.warning("タイトルを生成できませんでした。もう一度撮影してください。")
                 
         except Exception as e:
-            # エラーの詳細を表示
             st.error(f"Gemini解析エラー: {str(e)}")
-            st.info("💡 404エラーが出る場合は、ライブラリのバージョンが古い可能性があります。 requirements.txt に google-generativeai>=0.5.0 を指定してください。")
+            st.info("💡 依然としてエラーが出る場合は、requirements.txt に google-generativeai==0.5.0 以上が記載されているか確認してください。")
 
     st.write("---")
     st.subheader("📍 撮影場所")
