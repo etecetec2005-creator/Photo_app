@@ -3,16 +3,23 @@ import streamlit.components.v1 as components
 import google.generativeai as genai
 from PIL import Image
 import io
+import os
 
-# --- Gemini API 設定 ---
-API_KEY = "AIzaSyAC6W0cwPmw3VrpxqXoiKZEv4CpIYUHME0"
-genai.configure(api_key=API_KEY)
+# --- セキュリティ設定（環境変数から取得） ---
+# Streamlit CloudのSecrets、またはローカルの環境変数から取得します
+api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+
+if not api_key:
+    st.error("APIキーが設定されていません。StreamlitのSecrets設定を確認してください。")
+    st.stop()
+
+genai.configure(api_key=api_key)
 
 st.set_page_config(page_title="写真解析", layout="centered")
 
 st.title("写真解析・撮影")
 
-# カメラ入力
+# カメラ入力（iPhone SE などのモバイル端末でも使いやすいUI）
 img_file = st.camera_input("写真を撮る")
 
 if img_file:
@@ -21,20 +28,14 @@ if img_file:
     st.image(img, caption="撮影した写真")
 
     # --- Gemini 解析セクション ---
-    with st.spinner("AIが最適なモデルを探して解析中..."):
+    with st.spinner("AIが解析中..."):
         try:
-            # 利用可能なモデルをリストアップし、画像処理ができるものを自動選択
+            # 利用可能な最新モデルを動的に取得（404エラー対策）
             available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
             
-            # 優先順位：1.5 Flash -> 1.5 Pro -> その他
-            target_model = None
-            for m_name in available_models:
-                if 'gemini-1.5-flash' in m_name:
-                    target_model = m_name
-                    break
-            
-            if not target_model and available_models:
-                target_model = available_models[0]
+            # gemini-1.5-flashを最優先、なければリストの先頭を使用
+            target_model = next((m for m in available_models if 'gemini-1.5-flash' in m), 
+                                available_models[0] if available_models else None)
 
             if target_model:
                 model = genai.GenerativeModel(target_model)
@@ -44,13 +45,13 @@ if img_file:
                 if response.text:
                     st.success(f"🏷️ タイトル: {response.text.strip()}")
                 else:
-                    st.warning("解析結果が空でした。")
+                    st.warning("タイトルを生成できませんでした。")
             else:
                 st.error("利用可能なAIモデルが見つかりませんでした。")
                 
         except Exception as e:
-            st.error(f"解析エラーが発生しました。")
-            st.code(f"Error: {str(e)}")
+            st.error("解析エラーが発生しました。")
+            st.code(f"Detail: {str(e)}")
 
     st.write("---")
     st.subheader("📍 撮影場所")
@@ -78,14 +79,14 @@ if img_file:
                 output.innerText = formattedAddress || "住所特定失敗";
             } catch (err) { output.innerText = "通信エラー"; }
         },
-        (err) => { output.innerText = "位置情報を許可してください"; },
+        (err) => { output.innerText = "位置情報オフ"; },
         { enableHighAccuracy: true }
     );
     </script>
     """
     components.html(address_script, height=80)
 
-    st.info("💡 保存するには、上の写真を長押しして保存してください。")
+    st.info("💡 保存するには、上の写真を長押ししてください。")
     
     if st.button("撮り直す"):
         st.rerun()
