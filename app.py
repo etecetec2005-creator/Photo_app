@@ -14,7 +14,7 @@ if not api_key:
 genai.configure(api_key=api_key)
 
 st.set_page_config(page_title="自動写真保存", layout="centered")
-st.title("📸 全自動・高画質写真解析保存")
+st.title("📸 写真の中身")
 
 img_file = st.camera_input("写真を撮る")
 
@@ -22,7 +22,7 @@ if img_file:
     # 1. 画像の読み込み
     img = Image.open(img_file)
     width, height = img.size # 画像の元サイズを取得
-    st.image(img, caption="解析・高画質保存中...")
+    st.image(img, caption="解析・保存中...")
 
     # 2. AI解析（タイトル生成）
     ai_title = "名称未設定"
