@@ -109,6 +109,3 @@ if img_file:
     </script>
     """
     st.components.v1.html(auto_save_script, height=100)
-
-    if st.button("次の写真を撮る"):
-        st.rerun()
