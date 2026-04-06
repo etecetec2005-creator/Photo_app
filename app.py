@@ -13,7 +13,7 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-st.set_page_config(page_title="自動写真保存 v4.5", layout="centered")
+st.set_page_config(page_title="自動写真保存 v4.6", layout="centered")
 st.title("📸 写真解析・駅名特定保存")
 
 # --- セッション状態の初期化 ---
@@ -23,7 +23,7 @@ if "ai_title" not in st.session_state:
     st.session_state.ai_title = None
 
 # 1. カメラ入力
-img_file = st.camera_input("写真を撮る", key="camera_v45")
+img_file = st.camera_input("写真を撮る", key="camera_v46")
 
 # 新しく写真が撮られたらセッションを更新
 if img_file:
@@ -45,10 +45,17 @@ if st.session_state.image_data:
 
     # 住所がまだURLにない場合、JavaScriptで取得してリロード
     if not current_addr:
-        st.info("📍 位置情報を取得しています... しばらくお待ちください")
+        st.info("📍 位置情報を照合中... (10秒以上かかる場合は自動でスキップします)")
+        
+        # タイムアウト付き位置情報取得JS
         get_addr_js = """
         <script>
+        const timeout = setTimeout(() => {
+            window.location.href = window.location.href + "?addr=位置情報タイムアウト";
+        }, 10000); // 10秒で強制終了
+
         navigator.geolocation.getCurrentPosition(async (pos) => {
+            clearTimeout(timeout);
             try {
                 const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&accept-language=ja`);
                 const data = await res.json();
@@ -62,8 +69,9 @@ if st.session_state.image_data:
                 window.location.href = window.location.href + "?addr=住所取得エラー";
             }
         }, (err) => {
+            clearTimeout(timeout);
             window.location.href = window.location.href + "?addr=位置情報なし";
-        }, { enableHighAccuracy: true });
+        }, { enableHighAccuracy: true, timeout: 8000 });
         </script>
         """
         st.components.v1.html(get_addr_js, height=0)
@@ -74,16 +82,19 @@ if st.session_state.image_data:
     ai_title = st.session_state.ai_title
     near_station = "駅名不明"
 
-    with st.spinner(f"住所「{current_addr}」から最寄り駅を特定中..."):
-        try:
-            model = genai.GenerativeModel('gemini-2.5-flash-lite')
-            # 写真は見せず、住所テキストのみで駅名を聞く（確実性を高めるため）
-            prompt2 = f"指示：住所「{current_addr}」に最も近い実在する駅名を1つだけ答えてください。駅名のみ出力してください（例：東京駅）。"
-            response2 = model.generate_content(prompt2)
-            if response2 and response2.text:
-                near_station = response2.text.strip().replace("\n", "").replace("/", "-").replace(" ", "")
-        except:
-            pass
+    # 住所が取れている場合のみ、AIに駅名を聞く
+    if "住所" not in current_addr and "位置情報" not in current_addr:
+        with st.spinner(f"住所「{current_addr}」から最寄り駅を特定中..."):
+            try:
+                model = genai.GenerativeModel('gemini-2.5-flash-lite')
+                prompt2 = f"指示：住所「{current_addr}」に最も近い実在する駅名を1つだけ答えてください。駅名のみ出力してください（例：東京駅）。"
+                response2 = model.generate_content(prompt2)
+                if response2 and response2.text:
+                    near_station = response2.text.strip().replace("\n", "").replace("/", "-").replace(" ", "")
+            except:
+                pass
+    else:
+        near_station = "特定不可"
 
     # 画像のBase64変換
     buffered = io.BytesIO()
@@ -92,7 +103,9 @@ if st.session_state.image_data:
 
     # 表示と保存
     final_text = f"{ai_title} | {current_addr} | {near_station}"
-    final_file = f"{ai_title}_{current_addr}_{near_station}.jpg".replace("/", "-")
+    # ファイル名から禁止文字を排除
+    safe_addr = current_addr.replace("/", "-").replace("?", "")
+    final_file = f"{ai_title}_{safe_addr}_{near_station}.jpg"
     
     st.success(f"✅ 解析完了: {final_text}")
 
@@ -109,11 +122,13 @@ if st.session_state.image_data:
             const fontSize = Math.floor({img.height} / 30);
             ctx.font = "bold " + fontSize + "px sans-serif";
             ctx.textBaseline = "top";
-            const tw = ctx.measureText("{final_text}").width;
+            
+            const txt = "{final_text}";
+            const tw = ctx.measureText(txt).width;
             ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
             ctx.fillRect(20, 20, tw + fontSize, fontSize * 1.5);
             ctx.fillStyle = "white";
-            ctx.fillText("{final_text}", 20 + (fontSize/2), 20 + (fontSize/4));
+            ctx.fillText(txt, 20 + (fontSize/2), 20 + (fontSize/4));
             
             const link = document.createElement('a');
             link.download = "{final_file}";
