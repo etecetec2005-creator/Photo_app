@@ -11,29 +11,77 @@ if not api_key:
     st.error("APIキーが設定されていません。")
     st.stop()
 
-# Python側でも念のため設定
 genai.configure(api_key=api_key)
 
-st.set_page_config(page_title="自動写真保存 v4.0", layout="centered")
+st.set_page_config(page_title="自動写真保存 v4.5", layout="centered")
 st.title("📸 写真解析・駅名特定保存")
 
-# 1. カメラ入力
-img_file = st.camera_input("写真を撮る", key="camera_v4")
+# --- セッション状態の初期化 ---
+if "image_data" not in st.session_state:
+    st.session_state.image_data = None
+if "ai_title" not in st.session_state:
+    st.session_state.ai_title = None
 
+# 1. カメラ入力
+img_file = st.camera_input("写真を撮る", key="camera_v45")
+
+# 新しく写真が撮られたらセッションを更新
 if img_file:
-    # 画像の読み込み
-    img = Image.open(img_file)
-    width, height = img.size 
-    
-    # --- ステップ①: Python側でタイトル生成 (1回目AI) ---
-    ai_title = "名称未設定"
+    st.session_state.image_data = img_file.getvalue()
+    # 1回目のAI解析（タイトル生成）
     with st.spinner("AIがタイトルを生成中..."):
         try:
             model = genai.GenerativeModel('gemini-2.5-flash-lite')
-            prompt1 = "この写真の10文字以内の日本語タイトルを1つだけ出力してください。"
-            response = model.generate_content([prompt1, img])
-            if response and response.text:
-                ai_title = response.text.strip().replace("\n", "").replace("/", "-").replace(" ", "")
+            temp_img = Image.open(io.BytesIO(st.session_state.image_data))
+            prompt1 = "この写真の内容を分析し、10文字以内の日本語タイトルを1つだけ出力してください。"
+            response = model.generate_content([prompt1, temp_img])
+            st.session_state.ai_title = response.text.strip().replace("\n", "").replace("/", "-")
+        except:
+            st.session_state.ai_title = "名称未設定"
+
+# 2. 写真がある場合、住所取得プロセスへ
+if st.session_state.image_data:
+    current_addr = st.query_params.get("addr")
+
+    # 住所がまだURLにない場合、JavaScriptで取得してリロード
+    if not current_addr:
+        st.info("📍 位置情報を取得しています... しばらくお待ちください")
+        get_addr_js = """
+        <script>
+        navigator.geolocation.getCurrentPosition(async (pos) => {
+            try {
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&accept-language=ja`);
+                const data = await res.json();
+                const a = data.address;
+                const finalAddr = (a.province || "") + (a.city || a.town || "") + (a.suburb || "") + (a.neighbourhood || "");
+                
+                const url = new URL(window.location.href);
+                url.searchParams.set("addr", finalAddr || "住所不明");
+                window.location.href = url.href; 
+            } catch (e) {
+                window.location.href = window.location.href + "?addr=住所取得エラー";
+            }
+        }, (err) => {
+            window.location.href = window.location.href + "?addr=位置情報なし";
+        }, { enableHighAccuracy: true });
+        </script>
+        """
+        st.components.v1.html(get_addr_js, height=0)
+        st.stop()
+
+    # --- 3. 住所確定後の処理（2回目のAI解析：駅名特定） ---
+    img = Image.open(io.BytesIO(st.session_state.image_data))
+    ai_title = st.session_state.ai_title
+    near_station = "駅名不明"
+
+    with st.spinner(f"住所「{current_addr}」から最寄り駅を特定中..."):
+        try:
+            model = genai.GenerativeModel('gemini-2.5-flash-lite')
+            # 写真は見せず、住所テキストのみで駅名を聞く（確実性を高めるため）
+            prompt2 = f"指示：住所「{current_addr}」に最も近い実在する駅名を1つだけ答えてください。駅名のみ出力してください（例：東京駅）。"
+            response2 = model.generate_content(prompt2)
+            if response2 and response2.text:
+                near_station = response2.text.strip().replace("\n", "").replace("/", "-").replace(" ", "")
         except:
             pass
 
@@ -42,89 +90,43 @@ if img_file:
     img.save(buffered, format="JPEG", quality=100, subsampling=0)
     img_str = base64.b64encode(buffered.getvalue()).decode()
 
-    # --- ステップ②: JavaScript側で [住所取得] → [2回目AI(駅名)] → [保存] を一気に実行 ---
-    # リロードを挟まないため、ブラウザ内でGemini APIを直接叩く特殊な構成です
-    st.info("📍 住所と駅名を特定しています。画面をそのままにしてください...")
+    # 表示と保存
+    final_text = f"{ai_title} | {current_addr} | {near_station}"
+    final_file = f"{ai_title}_{current_addr}_{near_station}.jpg".replace("/", "-")
+    
+    st.success(f"✅ 解析完了: {final_text}")
 
     save_script = f"""
-    <div id="js_log" style="font-size:13px; color:#666; padding:10px; background:#f9f9f9; border-radius:5px; border:1px solid #ddd;">
-        ⏳ 処理を開始します...
-    </div>
     <script>
-    (async function() {{
-        const log = document.getElementById('js_log');
-        const API_KEY = "{api_key}";
-        const aiTitle = "{ai_title}";
-        const imgBase = "data:image/jpeg;base64,{img_str}";
-        
-        try {{
-            // 1. 位置情報取得
-            log.innerText = "📍 位置情報を取得中...";
-            const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej));
-            const lat = pos.coords.latitude;
-            const lon = pos.coords.longitude;
-
-            // 2. 住所取得 (OSM)
-            log.innerText = "🗺️ 住所を照合中...";
-            const addrRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${{lat}}&lon=${{lon}}&accept-language=ja`);
-            const addrData = await addrRes.json();
-            const a = addrData.address;
-            const finalAddr = (a.province || "") + (a.city || a.town || "") + (a.suburb || "") + (a.neighbourhood || "");
-
-            // 3. 2回目AI解析 (ブラウザから直接Geminiを叩く)
-            log.innerText = "🚉 住所「" + finalAddr + "」から最寄り駅を特定中...";
-            const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${{API_KEY}}`, {{
-                method: "POST",
-                headers: {{ "Content-Type": "application/json" }},
-                body: JSON.stringify({{
-                    contents: [{{ parts: [{{ text: "住所「" + finalAddr + "」に最も近い実在する駅名を1つだけ答えてください。余計な説明は一切不要。駅名のみ出力。" }}] }}]
-                }})
-            }});
-            const geminiData = await geminiRes.json();
-            const station = geminiData.candidates[0].content.parts[0].text.trim().replace(/\\n/g, "");
-
-            // 4. 画像合成と保存
-            log.innerText = "💾 保存を実行中: " + station;
-            const displayText = aiTitle + " | " + finalAddr + " | " + station;
-            const fileName = aiTitle + "_" + finalAddr.replace(/[/\\\\?%*:|"<>]/g, '-') + "_" + station + ".jpg";
-
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            const img = new Image();
-            img.onload = function() {{
-                canvas.width = {width};
-                canvas.height = {height};
-                ctx.drawImage(img, 0, 0, {width}, {height});
-                const fontSize = Math.floor({height} / 30);
-                ctx.font = "bold " + fontSize + "px sans-serif";
-                ctx.textBaseline = "top";
-                const padding = fontSize / 2;
-                const tw = ctx.measureText(displayText).width;
-                ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-                ctx.fillRect(20, 20, tw + (padding * 2), fontSize + (padding * 2));
-                ctx.fillStyle = "white";
-                ctx.fillText(displayText, 20 + padding, 20 + padding);
-                
-                const link = document.createElement('a');
-                link.download = fileName;
-                link.href = canvas.toDataURL('image/jpeg', 0.9);
-                link.click();
-                log.innerHTML = "<b style='color:green;'>✅ 完了: " + fileName + "</b>";
-            }};
-            img.src = imgBase;
-
-        }} catch (e) {{
-            log.innerHTML = "<b style='color:red;'>❌ エラー: " + e.message + "</b>";
-            // 失敗時も画像だけは出す
+    (function() {{
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const img = new Image();
+        img.onload = function() {{
+            canvas.width = {img.width};
+            canvas.height = {img.height};
+            ctx.drawImage(img, 0, 0, {img.width}, {img.height});
+            const fontSize = Math.floor({img.height} / 30);
+            ctx.font = "bold " + fontSize + "px sans-serif";
+            ctx.textBaseline = "top";
+            const tw = ctx.measureText("{final_text}").width;
+            ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+            ctx.fillRect(20, 20, tw + fontSize, fontSize * 1.5);
+            ctx.fillStyle = "white";
+            ctx.fillText("{final_text}", 20 + (fontSize/2), 20 + (fontSize/4));
+            
             const link = document.createElement('a');
-            link.download = aiTitle + "_error.jpg";
-            link.href = imgBase;
+            link.download = "{final_file}";
+            link.href = canvas.toDataURL('image/jpeg', 1.0);
             link.click();
-        }}
+        }};
+        img.src = "data:image/jpeg;base64,{img_str}";
     }})();
     </script>
     """
-    st.components.v1.html(save_script, height=120)
+    st.components.v1.html(save_script, height=0)
 
     if st.button("次の写真を撮る"):
+        st.session_state.clear()
+        st.query_params.clear()
         st.rerun()
