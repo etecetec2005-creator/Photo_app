@@ -13,42 +13,64 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-st.set_page_config(page_title="自動写真保存 v3.0", layout="centered")
+st.set_page_config(page_title="自動写真保存 v4.0", layout="centered")
 st.title("📸 写真解析・駅名特定保存")
 
-# --- ステップ①: URLから住所を取得（無い場合は取得JSを動かす） ---
+# --- ステップ①: 住所取得プロセス ---
 current_addr = st.query_params.get("addr")
 
 if not current_addr:
-    st.info("📍 位置情報を特定しています。しばらくお待ちください...")
-    # ブラウザから位置情報を取得し、URLに付与してリロードするJS
+    st.info("📍 位置情報を特定しています。ブラウザの『位置情報の使用』を許可してください...")
+    
+    # 取得に失敗した際や、時間がかかりすぎた場合のレスキューボタン
+    if st.button("取得が進まない場合はここをクリック"):
+        st.query_params.clear()
+        st.rerun()
+
     get_addr_js = """
     <script>
+    const options = {
+        enableHighAccuracy: true,
+        timeout: 10000,   // 10秒待つ
+        maximumAge: 0
+    };
+
     navigator.geolocation.getCurrentPosition(async (pos) => {
         try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&accept-language=ja`);
+            const lat = pos.coords.latitude;
+            const lon = pos.coords.longitude;
+            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&accept-language=ja`);
             const data = await res.json();
             const a = data.address;
-            // 住所を結合
             const finalAddr = (a.province || "") + (a.city || a.town || "") + (a.suburb || "") + (a.city_district || "") + (a.neighbourhood || "");
             
             const url = new URL(window.location.href);
             url.searchParams.set("addr", finalAddr || "住所不明");
-            window.location.href = url.href; 
+            window.location.replace(url.href); // 履歴に残さず置換
         } catch (e) {
-            window.location.href = window.location.href + "?addr=住所取得エラー";
+            window.location.replace(window.location.href.split('?')[0] + "?addr=住所取得エラー");
         }
     }, (err) => {
-        window.location.href = window.location.href + "?addr=位置情報なし";
-    }, { enableHighAccuracy: true, timeout: 5000 });
+        let msg = "位置情報なし";
+        if(err.code === 1) msg = "位置情報へのアクセスが拒否されました";
+        window.location.replace(window.location.href.split('?')[0] + "?addr=" + msg);
+    }, options);
     </script>
     """
     st.components.v1.html(get_addr_js, height=0)
-    st.stop()  # 住所が確定するまでカメラを出さない
+    st.stop() 
 
-# --- ステップ②: 住所が確定している場合のみカメラを表示 ---
+# --- ステップ②: 住所確定後のメイン画面 ---
 st.success(f"📍 現在地: {current_addr}")
-img_file = st.camera_input("写真を撮る", key="camera_v35_final")
+
+# 住所にエラーが含まれる場合の警告
+if "拒否" in current_addr or "エラー" in current_addr:
+    st.warning("位置情報が正常に取得できていません。ブラウザの設定で位置情報を「許可」してから、下のボタンでやり直してください。")
+    if st.button("もう一度位置情報を取得する"):
+        st.query_params.clear()
+        st.rerun()
+
+img_file = st.camera_input("写真を撮る", key="camera_v40_final")
 
 if img_file:
     img = Image.open(img_file)
@@ -60,22 +82,16 @@ if img_file:
     with st.spinner("Geminiが「タイトル」と「最寄り駅」を特定中..."):
         try:
             model = genai.GenerativeModel('gemini-2.5-flash-lite')
-            
-            # 既に取得済みの住所(current_addr)をAIに渡す
             prompt = f"""
-            指示:
-            1. 以下の【住所】の近くにある「駅名」を1つ特定してください（例: 新大阪駅）。
-            2. この写真の内容に合う10文字以内の「日本語タイトル」を付けてください。
+            以下の【住所】の近くにある「実在する駅名」を1つ特定し、写真に合う10文字以内の「日本語タイトル」を付けてください。
             
             【住所】: {current_addr}
             
-            回答は必ず以下の形式を守ってください。
-            タイトル: [タイトル]
-            駅名: [駅名]
+            回答形式:
+            タイトル: [ここにタイトル]
+            駅名: [ここに駅名]
             """
-            
             response = model.generate_content([prompt, img])
-            
             if response and response.text:
                 res_text = response.text.replace("*", "").replace("：", ":")
                 for line in res_text.strip().split("\n"):
@@ -86,22 +102,21 @@ if img_file:
         except Exception as e:
             st.warning(f"AI解析エラー: {e}")
 
-    # 3. 画像のBase64変換
+    # 画像のBase64変換
     buffered = io.BytesIO()
     img.save(buffered, format="JPEG", quality=100, subsampling=0)
     img_str = base64.b64encode(buffered.getvalue()).decode()
 
-    # 4. ファイル名の安全な処理
+    # ファイル名作成
     safe_addr = current_addr.replace("/", "-").replace("\\", "-")
     safe_station = near_station.replace("/", "-").replace("\\", "-")
     safe_title = ai_title.replace("/", "-").replace("\\", "-")
-    
     final_file_name = f"{safe_title}_{safe_addr}_{safe_station}.jpg"
     final_display_text = f"{safe_title} | {safe_addr} | {safe_station}"
 
     st.success(f"✅ 保存完了: {final_file_name}")
     
-    # 5. JavaScriptで加工・保存
+    # JavaScriptで加工・保存
     save_script = f"""
     <script>
     (function() {{
@@ -143,7 +158,6 @@ if img_file:
     """
     st.components.v1.html(save_script, height=0)
 
-    # 次の撮影のためのリセット
-    if st.button("次の場所で撮影する（リセット）"):
+    if st.button("別の場所で撮影する（リセット）"):
         st.query_params.clear()
         st.rerun()
