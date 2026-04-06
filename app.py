@@ -17,7 +17,7 @@ st.set_page_config(page_title="自動写真保存 v2.5", layout="centered")
 st.title("📸 写真解析・駅名特定保存")
 
 # 1. カメラ入力
-img_file = st.camera_input("写真を撮る", key="camera_v30_strict")
+img_file = st.camera_input("写真を撮る", key="camera_v31_final_strict")
 
 if img_file:
     # URLパラメータから住所を取得
@@ -37,7 +37,7 @@ if img_file:
                 
                 const url = new URL(window.location.href);
                 url.searchParams.set("addr", finalAddr || "住所不明");
-                window.location.href = url.href; // ここでリロードしてPythonを再実行
+                window.location.href = url.href; 
             } catch (e) {
                 window.location.href = window.location.href + "?addr=住所取得エラー";
             }
@@ -47,9 +47,9 @@ if img_file:
         </script>
         """
         st.components.v1.html(get_addr_js, height=0)
-        st.stop() # 住所が確定するまで、これ以降の「AI解析」へ絶対に進ませない
+        st.stop()
 
-    # --- ステップ②: 住所が確定（URLに存在）している時だけ実行されるAI解析 ---
+    # --- ステップ②: 住所が確定している時だけ実行されるAI解析 ---
     img = Image.open(img_file)
     width, height = img.size 
     st.image(img, caption=f"📍 取得住所: {current_addr}")
@@ -61,15 +61,15 @@ if img_file:
         try:
             model = genai.GenerativeModel('gemini-2.5-flash-lite')
             
-            # Geminiに住所を渡し、駅名を答えさせる
+            # AIへの指示をさらに厳格化
             prompt = f"""
             指示:
-            1. 以下の【住所】の近くにある「駅名」を1つ特定してください。
-            2. この写真の内容に合う10文字以内の「日本語タイトル」を付けてください。
+            1. 以下の【撮影地の住所】から、最も近い「駅名」を1つ特定してください（例: 新大阪駅）。
+            2. この写真の内容を表す10文字以内の「日本語タイトル」を付けてください。
             
-            【住所】: {current_addr}
+            【撮影地の住所】: {current_addr}
             
-            回答は必ず以下の形式を守ってください。
+            回答は必ず以下の2行のみとし、指定フォーマット以外の文字は含めないでください。
             タイトル: [タイトル]
             駅名: [駅名]
             """
@@ -77,12 +77,15 @@ if img_file:
             response = model.generate_content([prompt, img])
             
             if response and response.text:
-                res_text = response.text.replace("*", "")
+                # 全角コロンや記号のブレを吸収して確実に抽出
+                res_text = response.text.replace("*", "").replace("：", ":").replace("【", "").replace("】", "")
                 for line in res_text.strip().split("\n"):
                     if "タイトル" in line and ":" in line:
-                        ai_title = line.split(":")[1].strip()
+                        parsed = line.split(":", 1)[1].strip()
+                        if parsed: ai_title = parsed
                     if "駅名" in line and ":" in line:
-                        near_station = line.split(":")[1].strip()
+                        parsed = line.split(":", 1)[1].strip()
+                        if parsed: near_station = parsed
         except Exception as e:
             st.warning(f"AI解析エラー: {e}")
 
@@ -91,25 +94,25 @@ if img_file:
     img.save(buffered, format="JPEG", quality=100, subsampling=0)
     img_str = base64.b64encode(buffered.getvalue()).decode()
 
-    # 4. JavaScriptで加工・保存（ファイル名: タイトル_住所_駅名.jpg）
-    st.success(f"確定: {ai_title}_{current_addr}_{near_station}.jpg")
-    
-    # 禁止文字を掃除
+    # 4. ファイル名を「Python側」で完全に結合・固定する（JSの結合エラーを物理的に排除）
+    safe_title = ai_title.replace("/", "-").replace("\\", "-")
     safe_addr = current_addr.replace("/", "-").replace("\\", "-")
     safe_station = near_station.replace("/", "-").replace("\\", "-")
     
+    final_file_name = f"{safe_title}_{safe_addr}_{safe_station}.jpg"
+    final_display_text = f"{safe_title} | {safe_addr} | {safe_station}"
+
+    st.success(f"確定: {final_file_name}")
+    
+    # JavaScriptには「結合済みの文字列」をそのまま渡して保存させるだけ
     save_script = f"""
     <script>
     (function() {{
-        const aiTitle = "{ai_title}";
-        const addr = "{safe_addr}";
-        const station = "{safe_station}";
+        const fileName = "{final_file_name}";
+        const displayText = "{final_display_text}";
         const imgBase64 = "data:image/jpeg;base64,{img_str}";
         const oW = {width};
         const oH = {height};
-
-        const displayText = aiTitle + " | " + addr + " | " + station;
-        const fileName = aiTitle + "_" + addr + "_" + station + ".jpg";
 
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
