@@ -13,115 +13,98 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-st.set_page_config(page_title="自動写真保存 v4.0", layout="centered")
+st.set_page_config(page_title="自動写真保存 v2.6", layout="centered")
 st.title("📸 写真解析・駅名特定保存")
 
-# --- ステップ①: 住所取得プロセス ---
-current_addr = st.query_params.get("addr")
-
-if not current_addr:
-    st.info("📍 位置情報を特定しています。ブラウザの『位置情報の使用』を許可してください...")
-    
-    # 取得に失敗した際や、時間がかかりすぎた場合のレスキューボタン
-    if st.button("取得が進まない場合はここをクリック"):
-        st.query_params.clear()
-        st.rerun()
-
-    get_addr_js = """
-    <script>
-    const options = {
-        enableHighAccuracy: true,
-        timeout: 10000,   // 10秒待つ
-        maximumAge: 0
-    };
-
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-        try {
-            const lat = pos.coords.latitude;
-            const lon = pos.coords.longitude;
-            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&accept-language=ja`);
-            const data = await res.json();
-            const a = data.address;
-            const finalAddr = (a.province || "") + (a.city || a.town || "") + (a.suburb || "") + (a.city_district || "") + (a.neighbourhood || "");
-            
-            const url = new URL(window.location.href);
-            url.searchParams.set("addr", finalAddr || "住所不明");
-            window.location.replace(url.href); // 履歴に残さず置換
-        } catch (e) {
-            window.location.replace(window.location.href.split('?')[0] + "?addr=住所取得エラー");
-        }
-    }, (err) => {
-        let msg = "位置情報なし";
-        if(err.code === 1) msg = "位置情報へのアクセスが拒否されました";
-        window.location.replace(window.location.href.split('?')[0] + "?addr=" + msg);
-    }, options);
-    </script>
-    """
-    st.components.v1.html(get_addr_js, height=0)
-    st.stop() 
-
-# --- ステップ②: 住所確定後のメイン画面 ---
-st.success(f"📍 現在地: {current_addr}")
-
-# 住所にエラーが含まれる場合の警告
-if "拒否" in current_addr or "エラー" in current_addr:
-    st.warning("位置情報が正常に取得できていません。ブラウザの設定で位置情報を「許可」してから、下のボタンでやり直してください。")
-    if st.button("もう一度位置情報を取得する"):
-        st.query_params.clear()
-        st.rerun()
-
-img_file = st.camera_input("写真を撮る", key="camera_v40_final")
+# 1. カメラ入力
+img_file = st.camera_input("写真を撮る", key="camera_v26")
 
 if img_file:
+    # 画像の読み込み
     img = Image.open(img_file)
     width, height = img.size 
+    st.image(img, caption="解析準備中...")
 
+    # --- 2. JavaScriptで位置情報を取得しURL経由でPythonに戻す ---
+    address_ready = st.query_params.get("addr")
+    
+    if not address_ready:
+        st.info("📍 位置情報を照合しています...")
+        get_addr_js = """
+        <script>
+        navigator.geolocation.getCurrentPosition(async (pos) => {
+            try {
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&accept-language=ja`);
+                const data = await res.json();
+                const a = data.address;
+                // 市区町村〜町名までの住所を作成
+                const finalAddr = (a.city || a.town || a.village || "") + (a.suburb || "") + (a.city_district || "") + (a.neighbourhood || "");
+                
+                const url = new URL(window.location.href);
+                url.searchParams.set("addr", finalAddr || "住所不明");
+                window.location.href = url.href;
+            } catch (e) {
+                window.location.href = window.location.href + "?addr=住所取得エラー";
+            }
+        }, (err) => {
+            window.location.href = window.location.href + "?addr=位置情報なし";
+        }, { enableHighAccuracy: true });
+        </script>
+        """
+        st.components.v1.html(get_addr_js, height=0)
+        st.stop() # 住所が取れるまで停止
+
+    # --- 3. 住所確定後、AI解析（2段階実行） ---
+    current_addr = address_ready
     ai_title = "名称未設定"
-    near_station = "駅不明"
+    near_station = "駅名不明"
+    
+    model = genai.GenerativeModel('gemini-2.5-flash-lite')
 
-    with st.spinner("Geminiが「タイトル」と「最寄り駅」を特定中..."):
+    # 【解析 1回目：タイトル付与】
+    with st.spinner(f"位置「{current_addr}」に基づきタイトルを生成中..."):
         try:
-            model = genai.GenerativeModel('gemini-2.5-flash-lite')
-            prompt = f"""
-            以下の【住所】の近くにある「実在する駅名」を1つ特定し、写真に合う10文字以内の「日本語タイトル」を付けてください。
-            
-            【住所】: {current_addr}
-            
-            回答形式:
-            タイトル: [ここにタイトル]
-            駅名: [ここに駅名]
-            """
-            response = model.generate_content([prompt, img])
-            if response and response.text:
-                res_text = response.text.replace("*", "").replace("：", ":")
-                for line in res_text.strip().split("\n"):
-                    if "タイトル" in line and ":" in line:
-                        ai_title = line.split(":", 1)[1].strip()
-                    if "駅名" in line and ":" in line:
-                        near_station = line.split(":", 1)[1].strip()
+            prompt1 = f"場所「{current_addr}」付近で撮影されたこの写真に、10文字以内の日本語タイトルを付けてください。回答はタイトルのみ。"
+            response1 = model.generate_content([prompt1, img])
+            if response1 and response1.text:
+                ai_title = response1.text.strip().replace("\n", "").replace("/", "-").replace(" ", "")
         except Exception as e:
-            st.warning(f"AI解析エラー: {e}")
+            st.warning(f"タイトル解析エラー: {e}")
 
-    # 画像のBase64変換
+    # 【解析 2回目：駅名特定】
+    with st.spinner(f"周辺住所「{current_addr}」から最寄り駅を特定中..."):
+        try:
+            # 住所をヒントに画像から具体的な駅名（実在するもの）を推測させる
+            prompt2 = f"指示：この写真と住所「{current_addr}」から、最も近い実在する駅名を1つ特定してください。回答は駅名のみ（例：新大阪駅）。駅が特定できない場合は『駅名不明』と回答してください。"
+            response2 = model.generate_content([prompt2, img])
+            if response2 and response2.text:
+                near_station = response2.text.strip().replace("\n", "").replace("/", "-").replace(" ", "")
+        except Exception as e:
+            st.warning(f"駅名特定エラー: {e}")
+
+    # 4. 保存用のBase64変換
     buffered = io.BytesIO()
     img.save(buffered, format="JPEG", quality=100, subsampling=0)
     img_str = base64.b64encode(buffered.getvalue()).decode()
 
-    # ファイル名作成
+    # 5. ファイル名と表示用テキストの構築
+    # 記号などの除去
     safe_addr = current_addr.replace("/", "-").replace("\\", "-")
     safe_station = near_station.replace("/", "-").replace("\\", "-")
-    safe_title = ai_title.replace("/", "-").replace("\\", "-")
-    final_file_name = f"{safe_title}_{safe_addr}_{safe_station}.jpg"
-    final_display_text = f"{safe_title} | {safe_addr} | {safe_station}"
-
-    st.success(f"✅ 保存完了: {final_file_name}")
     
-    # JavaScriptで加工・保存
+    # 最終的なファイル名：タイトル_住所_駅名.jpg
+    final_file_name = f"{ai_title}_{safe_addr}_{safe_station}.jpg"
+    final_display_text = f"{ai_title} | {safe_addr} | {safe_station}"
+
+    st.success(f"✅ 解析完了: {final_display_text}")
+    
+    # JavaScriptで文字埋め込み ＋ JPG保存
     save_script = f"""
+    <div id="status" style="font-size:12px; color:green; padding:10px;">💾 ファイル「{final_file_name}」を保存しています...</div>
     <script>
     (function() {{
-        const fileName = "{final_file_name}";
         const displayText = "{final_display_text}";
+        const fileName = "{final_file_name}";
         const imgBase64 = "data:image/jpeg;base64,{img_str}";
         const oW = {width};
         const oH = {height};
@@ -141,12 +124,15 @@ if img_file:
             const padding = fontSize / 2;
             const textWidth = ctx.measureText(displayText).width;
             
+            // 背景ボックスを描画
             ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
             ctx.fillRect(20, 20, textWidth + (padding * 2), fontSize + (padding * 2));
             
+            // テキストを描画
             ctx.fillStyle = "white";
             ctx.fillText(displayText, 20 + padding, 20 + padding);
             
+            // ダウンロード実行
             const link = document.createElement('a');
             link.download = fileName;
             link.href = canvas.toDataURL('image/jpeg', 1.0);
@@ -156,8 +142,8 @@ if img_file:
     }})();
     </script>
     """
-    st.components.v1.html(save_script, height=0)
+    st.components.v1.html(save_script, height=50)
 
-    if st.button("別の場所で撮影する（リセット）"):
+    if st.button("次の写真を撮る"):
         st.query_params.clear()
         st.rerun()
