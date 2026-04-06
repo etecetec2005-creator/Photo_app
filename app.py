@@ -14,94 +14,87 @@ if not api_key:
 genai.configure(api_key=api_key)
 
 st.set_page_config(page_title="自動写真保存 v2.5", layout="centered")
-st.title("📸 写真解析・駅名特定保存")
+st.title("📸 写真解析・駅名確実保存")
 
 # 1. カメラ入力
-img_file = st.camera_input("写真を撮る", key="camera_v26_final")
+img_file = st.camera_input("写真を撮る", key="camera_v27_station_fix")
 
 if img_file:
     img = Image.open(img_file)
     width, height = img.size 
-    st.image(img, caption="位置情報を取得中...")
+    st.image(img, caption="位置情報と駅名を照合中...")
 
-    # --- 2. JavaScriptで住所を先に特定 ---
+    # --- 2. JavaScriptで住所と「最寄り駅」を先に特定 ---
     current_addr = st.query_params.get("addr")
+    near_station = st.query_params.get("st")
     
-    if not current_addr:
-        st.info("📍 現在地を照合しています...")
-        get_addr_js = """
+    if not current_addr or not near_station:
+        st.info("📍 最寄り駅を検索しています...")
+        get_info_js = """
         <script>
         navigator.geolocation.getCurrentPosition(async (pos) => {
+            const lat = pos.coords.latitude;
+            const lon = pos.coords.longitude;
             try {
-                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&accept-language=ja`);
+                // 住所取得 (Nominatim)
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&accept-language=ja`);
                 const data = await res.json();
                 const a = data.address;
-                // 住所を詳細に組み立て
                 const finalAddr = (a.province || "") + (a.city || a.town || "") + (a.suburb || "") + (a.city_district || "") + (a.neighbourhood || "");
                 
+                // 最寄り駅取得 (Overpass API - 半径1km以内の駅を検索)
+                let stationName = "駅不明";
+                try {
+                    const query = `[out:json];node(around:1000,${lat},${lon})[railway=station];out;`;
+                    const sRes = await fetch("https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query));
+                    const sData = await sRes.json();
+                    if (sData.elements && sData.elements.length > 0) {
+                        stationName = sData.elements[0].tags.name || "駅名なし";
+                    }
+                } catch(e) {}
+
                 const url = new URL(window.location.href);
                 url.searchParams.set("addr", finalAddr || "住所不明");
+                url.searchParams.set("st", stationName);
                 window.location.href = url.href;
             } catch (e) {
-                window.location.href = window.location.href + "?addr=住所取得エラー";
+                window.location.href = window.location.href + "?addr=取得エラー&st=駅不明";
             }
         }, (err) => {
-            window.location.href = window.location.href + "?addr=位置情報なし";
+            window.location.href = window.location.href + "?addr=位置情報なし&st=不明";
         }, { enableHighAccuracy: true });
         </script>
         """
-        st.components.v1.html(get_addr_js, height=0)
+        st.components.v1.html(get_info_js, height=0)
         st.stop()
 
-    # --- 3. AI解析（タイトル ＋ 駅名の抽出を強化） ---
+    # --- 3. 確定した情報を元にAIで「タイトル」だけを生成 ---
     ai_title = "名称未設定"
-    near_station = "駅不明"
-    
-    with st.spinner("AIがタイトルと最寄り駅を特定しています..."):
+    with st.spinner("AIがタイトルを付けています..."):
         try:
             model = genai.GenerativeModel('gemini-2.5-flash-lite')
-            
-            prompt = f"""
-            指示:
-            1. 以下の【住所】のすぐ近くにある「駅名」を1つだけ答えてください（例: 新大阪駅）。
-            2. この写真の内容にふさわしい短い日本語タイトル（10文字以内）を付けてください。
-            
-            【住所】: {current_addr}
-            
-            回答は必ず以下の2行の形式のみで出力してください。
-            タイトル: [ここにタイトル]
-            駅名: [ここに駅名]
-            """
-            
+            # 住所と駅名をAIに教えて、最適なタイトルを考えさせる
+            prompt = f"場所「{current_addr}」、最寄り駅「{near_station}」で撮影されたこの写真に、10文字以内の日本語タイトルを1つ付けて。回答はタイトルのみ。"
             response = model.generate_content([prompt, img])
-            
             if response and response.text:
-                text = response.text.replace("*", "").replace("　", "") # 記号などを掃除
-                for line in text.strip().split("\n"):
-                    if "タイトル" in line and ":" in line:
-                        ai_title = line.split(":")[1].strip().replace("/", "-")
-                    if "駅名" in line and ":" in line:
-                        near_station = line.split(":")[1].strip().replace("/", "-")
-        except Exception as e:
-            st.warning(f"AI解析エラー: {e}")
+                ai_title = response.text.strip().replace("\n", "").replace("/", "-")
+        except:
+            pass
 
     # 4. 保存用のBase64変換
     buffered = io.BytesIO()
     img.save(buffered, format="JPEG", quality=100, subsampling=0)
     img_str = base64.b64encode(buffered.getvalue()).decode()
 
-    # 5. JavaScriptで加工・保存（ファイル名: タイトル_住所_駅名.jpg）
+    # 5. JavaScriptで加工・保存（タイトル_住所_駅名.jpg）
     st.success(f"確定: {ai_title} / {current_addr} / {near_station}")
     
-    # URLパラメータの住所には「/」が含まれる場合があるため念入りに置換
-    safe_addr = current_addr.replace("/", "-").replace("\\", "-")
-    
     save_script = f"""
-    <div id="status" style="font-size:12px; color:green; padding:10px;">✅ 保存処理中...</div>
+    <div id="status" style="font-size:12px; color:green; padding:10px;">✅ 保存実行中...</div>
     <script>
     (function() {{
         const aiTitle = "{ai_title}";
-        const addr = "{safe_addr}";
+        const addr = "{current_addr}".replace(/[/\\\\?%*:|"<>]/g, '-');
         const station = "{near_station}";
         const imgBase64 = "data:image/jpeg;base64,{img_str}";
         const oW = {width};
